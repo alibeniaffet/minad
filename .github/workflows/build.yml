@@ -5,48 +5,58 @@ on:
   push:
     paths:
       - "*.zip"
-      - "build.yml"
       - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build APK
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Repository'yi indir
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Java 17 kur
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Node.js 20 kur
-        uses: actions/setup-node@v4
+      - name: Node.js 24 kur
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Android SDK kur
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: "15859902"
+          accept-android-sdk-licenses: "yes"
+          log-accepted-android-sdk-licenses: "false"
 
-      # ZIP'i GitHub'a açmadan yükleyebilirsin.
-      # Aşağıdaki adım ZIP'i otomatik açar.
-      - name: Proje ZIP dosyasını bul ve aç
+      # ZIP'i açmadan GitHub'a yükleyebilirsin.
+      # Bu adım ZIP'i otomatik olarak açar ve içindeki proje klasörünü bulur.
+      - name: ZIP dosyasını bul ve aç
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "HATA: Repository kökünde .zip dosyası bulunamadı."
+            echo "::error::Repository kökünde .zip dosyası bulunamadı."
             exit 1
           fi
 
-          echo "ZIP: $ZIP_FILE"
+          echo "Bulunan ZIP: $ZIP_FILE"
+
           rm -rf extracted
           mkdir -p extracted
+
           unzip -q "$ZIP_FILE" -d extracted
 
           echo "ZIP içeriği:"
@@ -55,32 +65,40 @@ jobs:
           ANDROID_DIR="$(find extracted -type d -name android -print -quit)"
 
           if [ -z "$ANDROID_DIR" ]; then
-            echo "HATA: ZIP içinde android klasörü bulunamadı."
+            echo "::error::ZIP içinde android klasörü bulunamadı."
             exit 1
           fi
 
           PROJECT_ROOT="$(dirname "$ANDROID_DIR")"
 
+          if [ ! -d "$PROJECT_ROOT/web" ]; then
+            echo "::error::ZIP içinde web klasörü bulunamadı: $PROJECT_ROOT/web"
+            exit 1
+          fi
+
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
 
-          echo "Proje kökü: $PROJECT_ROOT"
-          echo "Android klasörü: $ANDROID_DIR"
+          echo "Proje kökü : $PROJECT_ROOT"
+          echo "Android    : $ANDROID_DIR"
 
       - name: Android SDK paketlerini kur
         run: |
+          set -e
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Web uygulamasını derle
         working-directory: ${{ env.PROJECT_ROOT }}/web
         run: |
+          set -e
           npm install
           npm run build
 
       - name: Web dosyalarını Android assets içine kopyala
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           mkdir -p "$ANDROID_DIR/app/src/main/assets/web"
 
@@ -95,17 +113,21 @@ jobs:
                "$ANDROID_DIR/app/src/main/assets/web/bundle.css"
           fi
 
+          echo "Android assets:"
+          find "$ANDROID_DIR/app/src/main/assets/web" -maxdepth 1 -type f -ls
+
       - name: Gradle kurulumu
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.10.2"
 
       - name: APK oluştur
         working-directory: ${{ env.ANDROID_DIR }}
         run: |
+          set -e
           gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: APK'yı artifact olarak yükle
+      - name: APK'yı Artifact olarak yükle
         uses: actions/upload-artifact@v4
         with:
           name: MiBand5-WatchFace-Studio-APK
