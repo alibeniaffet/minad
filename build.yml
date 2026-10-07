@@ -1,0 +1,113 @@
+name: Mi Band 5 WatchFace Studio APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "*.zip"
+      - "build.yml"
+      - ".github/workflows/build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository'yi indir
+        uses: actions/checkout@v4
+
+      - name: Java 17 kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Node.js 20 kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v3
+
+      # ZIP'i GitHub'a açmadan yükleyebilirsin.
+      # Aşağıdaki adım ZIP'i otomatik açar.
+      - name: Proje ZIP dosyasını bul ve aç
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "HATA: Repository kökünde .zip dosyası bulunamadı."
+            exit 1
+          fi
+
+          echo "ZIP: $ZIP_FILE"
+          rm -rf extracted
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "ZIP içeriği:"
+          find extracted -maxdepth 3 -type f | head -100
+
+          ANDROID_DIR="$(find extracted -type d -name android -print -quit)"
+
+          if [ -z "$ANDROID_DIR" ]; then
+            echo "HATA: ZIP içinde android klasörü bulunamadı."
+            exit 1
+          fi
+
+          PROJECT_ROOT="$(dirname "$ANDROID_DIR")"
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_DIR=$ANDROID_DIR" >> "$GITHUB_ENV"
+
+          echo "Proje kökü: $PROJECT_ROOT"
+          echo "Android klasörü: $ANDROID_DIR"
+
+      - name: Android SDK paketlerini kur
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Web uygulamasını derle
+        working-directory: ${{ env.PROJECT_ROOT }}/web
+        run: |
+          npm install
+          npm run build
+
+      - name: Web dosyalarını Android assets içine kopyala
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p "$ANDROID_DIR/app/src/main/assets/web"
+
+          cp "$PROJECT_ROOT/web/index.html" \
+             "$ANDROID_DIR/app/src/main/assets/web/index.html"
+
+          cp "$PROJECT_ROOT/web/dist/bundle.js" \
+             "$ANDROID_DIR/app/src/main/assets/web/bundle.js"
+
+          if [ -f "$PROJECT_ROOT/web/dist/bundle.css" ]; then
+            cp "$PROJECT_ROOT/web/dist/bundle.css" \
+               "$ANDROID_DIR/app/src/main/assets/web/bundle.css"
+          fi
+
+      - name: Gradle kurulumu
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: APK oluştur
+        working-directory: ${{ env.ANDROID_DIR }}
+        run: |
+          gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: APK'yı artifact olarak yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiBand5-WatchFace-Studio-APK
+          path: ${{ env.ANDROID_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
